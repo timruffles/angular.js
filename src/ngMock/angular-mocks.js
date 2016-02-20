@@ -2562,6 +2562,7 @@ angular.mock.$RootScopeDecorator = ['$delegate', function($delegate) {
 if (window.jasmine || window.mocha) {
 
   var currentSpec = null,
+      sharedInjector = false,
       annotatedFunctions = [],
       isSpecRunning = function() {
         return !!currentSpec;
@@ -2574,48 +2575,6 @@ if (window.jasmine || window.mocha) {
     }
     return angular.mock.$$annotate.apply(this, arguments);
   };
-
-
-  (window.beforeEach || window.setup)(function() {
-    annotatedFunctions = [];
-    currentSpec = this;
-  });
-
-  (window.afterEach || window.teardown)(function() {
-    var injector = currentSpec.$injector;
-
-    annotatedFunctions.forEach(function(fn) {
-      delete fn.$inject;
-    });
-
-    angular.forEach(currentSpec.$modules, function(module) {
-      if (module && module.$$hashKey) {
-        module.$$hashKey = undefined;
-      }
-    });
-
-    currentSpec.$injector = null;
-    currentSpec.$modules = null;
-    currentSpec.$providerInjector = null;
-    currentSpec = null;
-
-    if (injector) {
-      injector.get('$rootElement').off();
-      injector.get('$rootScope').$destroy();
-    }
-
-    // clean up jquery's fragment cache
-    angular.forEach(angular.element.fragments, function(val, key) {
-      delete angular.element.fragments[key];
-    });
-
-    MockXhr.$$lastInstance = null;
-
-    angular.forEach(angular.callbacks, function(val, key) {
-      delete angular.callbacks[key];
-    });
-    angular.callbacks.counter = 0;
-  });
 
   /**
    * @ngdoc function
@@ -2665,6 +2624,94 @@ if (window.jasmine || window.mocha) {
       }
     }
   };
+
+  module.$$beforeAllHook = (window.before || window.beforeAll);
+  module.$$afterAllHook = (window.after || window.afterAll);
+
+  module.$$currentSpec = function(to) {
+    if(arguments.length === 0) return to;
+    currentSpec = to;
+  };
+
+  // shared injector: disable auto-create of new
+  // injector per test case until `disableSharedInjector()`
+  // is called. we're left with a single shared
+  // injector throughout
+  module.sharedInjector = function() {
+    module.$$beforeAllHook(function() {
+      if(sharedInjector) {
+        throw Error("once a shared injector is set, all describes below that share that injector");
+      }
+      currentSpec = this;
+      sharedInjector = true;
+    });
+
+    module.$$afterAllHook(function() {
+      sharedInjector = false;
+      module.$$cleanup();
+    });
+  };
+
+  module.$$beforeEach = function() {
+    if(sharedInjector && currentSpec && currentSpec != this) {
+      var state = currentSpec;
+      currentSpec = this;
+      angular.forEach(["$injector","$modules","$providerInjector", "$injectorStrict"], function(k) {
+        currentSpec[k] = state[k]; 
+        state[k] = null;
+      });
+    } else {
+      currentSpec = this;
+    }
+    
+  };
+
+  
+  module.$$afterEach = function() {
+    if(!sharedInjector) {
+      module.$$cleanup();
+    }
+  };
+
+  module.$$cleanup = function() {
+    var injector = currentSpec.$injector;
+
+    annotatedFunctions.forEach(function(fn) {
+      delete fn.$inject;
+    });
+    annotatedFunctions = [];
+
+    angular.forEach(currentSpec.$modules, function(module) {
+      if (module && module.$$hashKey) {
+        module.$$hashKey = undefined;
+      }
+    });
+
+    currentSpec.$injector = null;
+    currentSpec.$modules = null;
+    currentSpec.$providerInjector = null;
+    currentSpec = null;
+
+    if (injector) {
+      injector.get('$rootElement').off();
+      injector.get('$rootScope').$destroy();
+    }
+
+    // clean up jquery's fragment cache
+    angular.forEach(angular.element.fragments, function(val, key) {
+      delete angular.element.fragments[key];
+    });
+
+    MockXhr.$$lastInstance = null;
+
+    angular.forEach(angular.callbacks, function(val, key) {
+      delete angular.callbacks[key];
+    });
+    angular.callbacks.counter = 0;
+  };
+
+  (window.beforeEach || window.setup)(module.$$beforeEach);
+  (window.afterEach || window.teardown)(module.$$afterEach);
 
   /**
    * @ngdoc function

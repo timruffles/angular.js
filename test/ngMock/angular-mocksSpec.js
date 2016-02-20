@@ -2414,3 +2414,216 @@ describe('make sure that we can create an injector outside of tests', function()
   //how we manage annotated function cleanup during tests. See #10967
   angular.injector([function($injector) {}]);
 });
+
+ddescribe('sharedInjector', function() {
+  // this is of a bit tricky feature test as we hit angular's own testing
+  // mechanisms (e.g around jQuery cache checking), as ngMock augments the very
+  // jasmine test runner we're using to test ngMock!
+  //
+  // with that in mind, we define a stubbed test framework and run the 
+  // to simulate test cases being run with the ngMock hooks
+
+
+  // we use the 'module' and 'inject' globals from ngMock
+
+  it("allowes me to mutate a single instace of a module (proving it has been shared)", ngMockTest(function() {
+    sdescribe("test state is shared", function() {
+      angular.module("sharedInjectorTestModuleA", [])
+        .factory("testService", function() {
+          return { state: 0 } 
+        });
+
+      module.sharedInjector();
+
+      sbeforeAll(module("sharedInjectorTestModuleA"));
+
+      sit("access and mutate", inject(function(testService) {
+        testService.state += 1;
+      }));
+
+      sit("expect mutation to have persisted", inject(function(testService) {
+        expect(testService.state).toEqual(1);
+      }));
+    });
+  }));
+
+
+  it("works with standard beforeEach", ngMockTest(function() {
+    sdescribe("test state is not shared", function() {
+      angular.module("sharedInjectorTestModuleC", [])
+        .factory("testService", function() {
+          return { state: 0 } 
+        });
+
+      sbeforeEach(module("sharedInjectorTestModuleC"));
+
+      sit("access and mutate", inject(function(testService) {
+        testService.state += 1;
+      }));
+
+      sit("expect mutation not to have persisted", inject(function(testService) {
+        expect(testService.state).toEqual(0);
+      }));
+    });
+  }));
+
+
+  it('allows me to stub with shared injector', ngMockTest(function() {
+    sdescribe("test state is shared", function() {
+      angular.module("sharedInjectorTestModuleD", [])
+        .value("testService", 43);
+
+      module.sharedInjector();
+
+      sbeforeAll(module("sharedInjectorTestModuleD", function($provide) {
+        $provide.value("testService", 42);
+      }));
+
+      sit("expected access stubbed value", inject(function(testService) {
+        expect(testService).toEqual(42);
+      }));
+    })
+  }));
+
+  it("doesn't interfere with other test sdescribes", ngMockTest(function() {
+    angular.module("sharedInjectorTestModuleE", [])
+      .factory("testService", function() {
+        return { state: 0 } 
+      });
+
+    sdescribe("with stubbed injector", function() {
+
+      module.sharedInjector();
+
+      sbeforeAll(module("sharedInjectorTestModuleE"));
+
+      sit("access and mutate", inject(function(testService) {
+        expect(testService.state).toEqual(0);
+        testService.state += 1;
+      }));
+
+      sit("expect mutation to have persisted", inject(function(testService) {
+        expect(testService.state).toEqual(1);
+      }));
+    });
+
+    sdescribe("without stubbed injector", function() {
+      sbeforeEach(module("sharedInjectorTestModuleE"));
+
+      sit("access and mutate", inject(function(testService) {
+        expect(testService.state).toEqual(0);
+        testService.state += 1;
+      }));
+
+      sit("expect original, unmutated value", inject(function(testService) {
+        expect(testService.state).toEqual(0);
+      }));
+    });
+  }));
+
+  function ngMockTest(define) {
+    return function() {
+      var spec = this;
+      module.$$currentSpec(null);
+
+      var specStub = {
+        stubbed: true,
+      };
+      
+      // configure our stubbed test framework and then hook ngMock into it
+      // in much the same way
+      module.$$beforeAllHook = sbeforeAll;
+      module.$$afterAllHook = safterAll;
+
+      sdescribe.root = sdescribe("root", function() {});
+
+      sdescribe.root.beforeEach.push(module.$$beforeEach);
+      sdescribe.root.afterEach.push(module.$$afterEach);
+
+      define();
+      sdescribe.root.run();
+
+      angular.element.cache = {};
+      module.$$currentSpec(spec);
+    }
+  }
+
+  function sdescribe(name, define) {
+    var self = { name: name };
+    self.parent = sdescribe.current || sdescribe.root;
+    if(self.parent) {
+      self.parent.describes.push(self);
+    }
+
+    var previous = sdescribe.current;
+    sdescribe.current = self;
+
+    self.beforeAll = [];
+    self.beforeEach = [];
+    self.afterAll = [];
+    self.afterEach = [];
+    self.define = define;
+    self.tests = [];
+    self.describes = [];
+
+    self.run = function() {
+      self.hooks("beforeAll", spec);
+
+      self.tests.forEach(function(test) {
+        var spec = {};
+        if(self.parent) self.parent.hooks("beforeEach", spec);
+        self.hooks("beforeEach", spec);
+        test.run.call(spec);
+        self.hooks("afterEach", spec);
+        if(self.parent) self.parent.hooks("afterEach", spec);
+      });
+
+      self.describes.forEach(function(d) {
+        d.run(); 
+      });
+        
+      self.hooks("afterAll", spec);
+    };
+
+    self.hooks = function(hook, spec) {
+      self[hook].forEach(function(f) {
+        f.call(spec);
+      })
+    }
+
+    define();
+
+    sdescribe.current = previous;
+
+    return self;
+  }
+
+  function sit(name, fn) {
+    if(typeof fn !== "function") throw Error("not fn", fn);
+    sdescribe.current.tests.push({
+      name: name,
+      run: fn,
+    });
+  }
+
+  function sbeforeAll(fn) {
+    if(typeof fn !== "function") throw Error("not fn", fn);
+    sdescribe.current.beforeAll.push(fn);
+  }
+
+  function safterAll(fn) {
+    if(typeof fn !== "function") throw Error("not fn", fn);
+    sdescribe.current.afterAll.push(fn);
+  }
+
+  function sbeforeEach(fn) {
+    if(typeof fn !== "function") throw Error("not fn", fn);
+    sdescribe.current.beforeEach.push(fn);
+  }
+
+  function safterEach(fn) {
+    if(typeof fn !== "function") throw Error("not fn", fn);
+    sdescribe.current.afterEach.push(fn);
+  }
+
+})
